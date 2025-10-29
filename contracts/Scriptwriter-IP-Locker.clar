@@ -6,8 +6,11 @@
 (define-constant ERR-SCRIPT-ALREADY-EXISTS (err u105))
 (define-constant ERR-INVALID-LICENSE-FEE (err u106))
 (define-constant ERR-TRANSFER-FAILED (err u107))
+(define-constant ERR-INVALID-TRANSFER-PRICE (err u108))
+(define-constant ERR-SELF-TRANSFER (err u109))
 
 (define-constant MIN-LICENSE-FEE u1000000)
+(define-constant MIN-TRANSFER-PRICE u1000000)
 (define-constant MAX-TITLE-LENGTH u100)
 (define-constant MAX-DESCRIPTION-LENGTH u500)
 
@@ -214,6 +217,49 @@
   (begin
     (asserts! (is-eq tx-sender (var-get contract-owner)) ERR-NOT-AUTHORIZED)
     (var-set contract-owner new-owner)
+    (ok true)
+  )
+)
+
+(define-public (transfer-script (script-id uint) (new-owner principal) (transfer-price uint))
+  (let 
+    (
+      (script-data (unwrap! (map-get? scripts { script-id: script-id }) ERR-SCRIPT-NOT-FOUND))
+      (current-owner (get scriptwriter script-data))
+      (platform-fee (/ (* transfer-price (var-get platform-fee-percentage)) u100))
+      (owner-payment (- transfer-price platform-fee))
+    )
+    (asserts! (is-eq tx-sender current-owner) ERR-NOT-AUTHORIZED)
+    (asserts! (not (is-eq new-owner current-owner)) ERR-SELF-TRANSFER)
+    (asserts! (>= transfer-price MIN-TRANSFER-PRICE) ERR-INVALID-TRANSFER-PRICE)
+    (asserts! (get is-active script-data) ERR-SCRIPT-NOT-FOUND)
+    
+    (try! (stx-transfer? transfer-price new-owner current-owner))
+    (try! (stx-transfer? platform-fee new-owner (var-get contract-owner)))
+    
+    (map-set scripts
+      { script-id: script-id }
+      (merge script-data { scriptwriter: new-owner })
+    )
+    
+    (map-set scriptwriter-stats
+      { scriptwriter: current-owner }
+      {
+        total-scripts: (- (get-scriptwriter-script-count current-owner) u1),
+        total-earnings: (+ (get-scriptwriter-total-earnings current-owner) owner-payment),
+        scripts-licensed: (get-scriptwriter-licensed-count current-owner)
+      }
+    )
+    
+    (map-set scriptwriter-stats
+      { scriptwriter: new-owner }
+      {
+        total-scripts: (+ (get-scriptwriter-script-count new-owner) u1),
+        total-earnings: (get-scriptwriter-total-earnings new-owner),
+        scripts-licensed: (get-scriptwriter-licensed-count new-owner)
+      }
+    )
+    
     (ok true)
   )
 )
